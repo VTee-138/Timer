@@ -128,7 +128,12 @@
       }
       if (result.currentSession) {
         currentSession = result.currentSession;
-        startTime = new Date(result.currentSession.start_time);
+        // Use local_start_time if available, otherwise parse start_time
+        if (result.currentSession.local_start_time) {
+          startTime = new Date(result.currentSession.local_start_time);
+        } else {
+          startTime = new Date(result.currentSession.start_time);
+        }
         updateButtonStates(true);
         showTimer();
         startTimer();
@@ -164,7 +169,7 @@
         
         try {
           // Try to fetch from database first
-          const response = await fetch(`http://100.92.102.97:3000/api/users/${employeeCode}`);
+          const response = await fetch(`http://timer.aipencil.name.vn/api/users/${employeeCode}`);
           
           if (response.ok) {
             const employee = await response.json();
@@ -316,12 +321,12 @@
       }, 1000);
     }
 
-    // Database functions
+        // Database functions
     async function insertTimeLog(data) {
       try {
         // For now, we'll use a simple fetch to a webhook/API endpoint
         // You'll need to create an API endpoint to handle database operations
-        const response = await fetch('http://100.92.102.97:3000/api/time-logs', {
+        const response = await fetch('http://timer.aipencil.name.vn/api/time-logs', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -343,7 +348,7 @@
 
     async function updateTimeLog(id, endTime, duration) {
       try {
-        const response = await fetch(`http://100.92.102.97:3000/api/time-logs/${id}`, {
+        const response = await fetch(`http://timer.aipencil.name.vn/api/time-logs/${id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -377,6 +382,9 @@
             startTime = new Date();
             const startTimeISO = startTime.toISOString();
             
+            // Generate random session ID first
+            const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            
             try {
               // Insert new time log record into database
               const timeLogData = {
@@ -389,10 +397,11 @@
               const dbResult = await insertTimeLog(timeLogData);
               
               currentSession = {
-                id: dbResult.id, // time_logs table ID
+                id: dbResult.id || sessionId, // Use database ID or fallback to session ID
                 user_id: result.employeeData.id,
                 employee_code: result.employeeData.employee_code,
-                start_time: startTimeISO
+                start_time: startTimeISO,
+                local_start_time: startTime.getTime() // Store timestamp for accurate timer calculation
               };
 
               chrome.storage.local.set({ currentSession }, () => {
@@ -411,10 +420,11 @@
               
               // Fallback: create offline session
               currentSession = {
-                id: 'offline_' + Date.now(),
+                id: sessionId,
                 user_id: result.employeeData.id,
                 employee_code: result.employeeData.employee_code,
-                start_time: startTimeISO
+                start_time: startTimeISO,
+                local_start_time: startTime.getTime() // Store timestamp for accurate timer calculation
               };
 
               chrome.storage.local.set({ currentSession }, () => {
@@ -448,16 +458,50 @@
         if (currentSession && startTime) {
           const endTime = new Date();
           const endTimeISO = endTime.toISOString();
-          const duration = Math.floor((endTime - startTime) / 1000);
+          
+          // Calculate duration more accurately
+          let duration;
+          if (currentSession.local_start_time) {
+            // Use local timestamp for more accurate calculation
+            duration = Math.floor((endTime.getTime() - currentSession.local_start_time) / 1000);
+          } else {
+            // Fallback to parsing stored time
+            const sessionStartTime = new Date(currentSession.start_time);
+            duration = Math.floor((endTime.getTime() - sessionStartTime.getTime()) / 1000);
+          }
+          
+          console.log(`Session duration: ${duration} seconds`);
           
           try {
             // Update time log in database with end time and duration
-            await updateTimeLog(currentSession.id, endTimeISO, duration);
+            const updateResult = await updateTimeLog(currentSession.id, endTimeISO, duration);
             
             const hours = Math.floor(duration / 3600);
             const minutes = Math.floor((duration % 3600) / 60);
             
-            showStatus(`🏁 Kết thúc ca làm việc! (${hours}h ${minutes}m) - Đã lưu vào database`, 'success');
+            if (updateResult) {
+              showStatus(`🏁 Kết thúc ca làm việc! (${hours}h ${minutes}m) - Đã lưu vào database`, 'success');
+            } else {
+              showStatus(`⚠️ Kết thúc ca làm việc (${hours}h ${minutes}m) - Lưu offline`, 'info');
+              
+              // Store offline data for later sync
+              const offlineData = {
+                session_id: currentSession.id,
+                user_id: currentSession.user_id,
+                employee_code: currentSession.employee_code,
+                start_time: currentSession.start_time,
+                end_time: endTimeISO,
+                duration_seconds: duration,
+                timestamp: Date.now()
+              };
+              
+              // Save to local storage for later sync
+              chrome.storage.local.get(['offlineTimeLogs'], (result) => {
+                const offlineLogs = result.offlineTimeLogs || [];
+                offlineLogs.push(offlineData);
+                chrome.storage.local.set({ offlineTimeLogs });
+              });
+            }
             
           } catch (dbError) {
             console.error('Database error:', dbError);

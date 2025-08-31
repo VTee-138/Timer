@@ -3,7 +3,7 @@ const { Pool } = require('pg');
 const cors = require('cors');
 
 const app = express();
-const port = 3000;
+const port = 3006;
 
 // Database configuration
 const pool = new Pool({
@@ -38,7 +38,7 @@ app.post('/api/time-logs', async (req, res) => {
     const query = `
       INSERT INTO time_logs (user_id, start_time, end_time, duration_seconds)
       VALUES ($1, $2, $3, $4)
-      RETURNING id, user_id, start_time, end_time, duration_seconds
+      RETURNING user_id, start_time, end_time, duration_seconds
     `;
     
     const values = [user_id, start_time, end_time, duration_seconds];
@@ -187,7 +187,7 @@ app.get('/health', (req, res) => {
 
 // Start server
 app.listen(port, () => {
-  console.log(`Time tracking API server running on http://100.92.102.97:${port}`);
+  console.log(`Time tracking API server running on http://timer.aipencil.name.vn`);
   console.log('Available endpoints:');
   console.log('  POST   /api/time-logs          - Create time log');
   console.log('  PUT    /api/time-logs/:id      - Update time log');
