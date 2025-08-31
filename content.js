@@ -120,23 +120,75 @@
     let currentSession = null;
 
     // Load saved employee data and session
-    chrome.storage.local.get(['employeeData', 'currentSession'], (result) => {
+    chrome.storage.local.get(['employeeData', 'currentSession'], async (result) => {
       if (result.employeeData) {
         displayEmployeeInfo(result.employeeData);
         enableButtons();
         employeeIdInput.value = result.employeeData.employee_code;
-      }
-      if (result.currentSession) {
-        currentSession = result.currentSession;
-        // Use local_start_time if available, otherwise parse start_time
-        if (result.currentSession.local_start_time) {
-          startTime = new Date(result.currentSession.local_start_time);
-        } else {
-          startTime = new Date(result.currentSession.start_time);
+        
+        // Check for active session on server
+        const activeSession = await checkActiveSession(result.employeeData.id);
+        if (activeSession) {
+          // Server has active session, restore it
+          currentSession = {
+            id: activeSession.id,
+            user_id: activeSession.user_id,
+            employee_code: activeSession.employee_code,
+            start_time: activeSession.start_time,
+            local_start_time: new Date(activeSession.start_time).getTime()
+          };
+          
+          startTime = new Date(activeSession.start_time);
+          updateButtonStates(true);
+          showTimer();
+          startTimer();
+          
+          // Update local storage to match server
+          chrome.storage.local.set({ currentSession });
+          showStatus('🔄 Khôi phục phiên làm việc từ server', 'info');
         }
-        updateButtonStates(true);
-        showTimer();
-        startTimer();
+      }
+      
+      // Check local session if no server session found
+      if (result.currentSession && !currentSession) {
+        const localSession = result.currentSession;
+        
+        // Validate local session has required data
+        if (localSession.id && localSession.user_id && localSession.start_time) {
+          // For database IDs, verify session still exists on server
+          if (typeof localSession.id === 'number') {
+            const activeSession = await checkActiveSession(localSession.user_id);
+            if (activeSession && activeSession.id === localSession.id) {
+              // Local session matches server, restore it
+              currentSession = localSession;
+              if (localSession.local_start_time) {
+                startTime = new Date(localSession.local_start_time);
+              } else {
+                startTime = new Date(localSession.start_time);
+              }
+              updateButtonStates(true);
+              showTimer();
+              startTimer();
+            } else {
+              // Local session is stale, clear it
+              chrome.storage.local.remove(['currentSession']);
+              showStatus('⚠️ Phiên làm việc cũ đã hết hạn', 'info');
+            }
+          } else if (localSession.id.toString().startsWith('offline_')) {
+            // Offline session, restore as-is
+            currentSession = localSession;
+            startTime = localSession.local_start_time ? 
+              new Date(localSession.local_start_time) : 
+              new Date(localSession.start_time);
+            updateButtonStates(true);
+            showTimer();
+            startTimer();
+            showStatus('📱 Chế độ offline - Dữ liệu chưa đồng bộ', 'info');
+          }
+        } else {
+          // Invalid local session, clear it
+          chrome.storage.local.remove(['currentSession']);
+        }
       }
     });
 
@@ -321,7 +373,7 @@
       }, 1000);
     }
 
-        // Database functions
+        // Database functions với error handling tốt hơn
     async function insertTimeLog(data) {
       try {
         const response = await fetch('http://timer.aipencil.name.vn/api/time-logs', {
@@ -332,21 +384,25 @@
           body: JSON.stringify(data)
         });
 
+        const result = await response.json();
+        
         if (!response.ok) {
-          throw new Error(`Database insert failed: ${response.status}`);
+          // Handle specific error cases
+          if (response.status === 409) {
+            throw new Error(`User already has an active session: ${result.details || result.error}`);
+          }
+          throw new Error(`API Error (${response.status}): ${result.error || 'Unknown error'}`);
         }
 
-        const result = await response.json();
-        // Only return result if it has a valid database ID
-        if (result && result.id && typeof result.id === 'number') {
-          return result;
-        } else {
-          throw new Error('Invalid response from server');
+        // Validate response structure
+        if (!result.success || !result.data || !result.data.id || typeof result.data.id !== 'number') {
+          throw new Error('Invalid response from server: missing required data');
         }
+        
+        return result.data;
       } catch (error) {
         console.error('Error inserting time log:', error);
-        // Return null to indicate failure, don't return mock ID
-        return null;
+        throw error; // Re-throw to be handled by caller
       }
     }
 
@@ -363,14 +419,42 @@
           })
         });
 
+        const result = await response.json();
+        
         if (!response.ok) {
-          throw new Error('Database update failed');
+          if (response.status === 404) {
+            throw new Error('Time log record not found');
+          }
+          if (response.status === 409) {
+            throw new Error(`Session already completed: ${result.details || result.error}`);
+          }
+          throw new Error(`API Error (${response.status}): ${result.error || 'Unknown error'}`);
         }
 
-        return await response.json();
+        if (!result.success || !result.data) {
+          throw new Error('Invalid response from server');
+        }
+        
+        return result.data;
       } catch (error) {
         console.error('Error updating time log:', error);
-        return null;
+        throw error; // Re-throw to be handled by caller
+      }
+    }
+
+    async function checkActiveSession(userId) {
+      try {
+        const response = await fetch(`http://timer.aipencil.name.vn/api/users/${userId}/active-session`);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to check active session: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        return result.has_active_session ? result.data : null;
+      } catch (error) {
+        console.error('Error checking active session:', error);
+        return null; // Return null on error to avoid blocking
       }
     }
 
@@ -382,66 +466,102 @@
         startBtn.disabled = true;
 
         chrome.storage.local.get(['employeeData'], async (result) => {
-          if (result.employeeData) {
+          if (!result.employeeData) {
+            showStatus('❌ Không tìm thấy thông tin nhân viên!', 'error');
+            startText.textContent = 'Bắt Đầu';
+            startBtn.disabled = false;
+            return;
+          }
+
+          try {
+            // Check if user already has an active session
+            const existingSession = await checkActiveSession(result.employeeData.id);
+            if (existingSession) {
+              showStatus('⚠️ Bạn đã có phiên làm việc đang hoạt động!', 'error');
+              
+              // Restore the existing session
+              currentSession = {
+                id: existingSession.id,
+                user_id: existingSession.user_id,
+                employee_code: existingSession.employee_code,
+                start_time: existingSession.start_time,
+                local_start_time: new Date(existingSession.start_time).getTime()
+              };
+              
+              startTime = new Date(existingSession.start_time);
+              chrome.storage.local.set({ currentSession });
+              updateButtonStates(true);
+              showTimer();
+              startTimer();
+              floatingButton.classList.add('active');
+              
+              startText.textContent = 'Bắt Đầu';
+              return;
+            }
+
             startTime = new Date();
             const startTimeISO = startTime.toISOString();
             
-            try {
-              // Insert new time log record into database
-              const timeLogData = {
-                user_id: result.employeeData.id, // UUID from users table
-                employee_code: result.employeeData.employee_code, // Add employee_code
-                start_time: startTimeISO,
-                end_time: null,
-                duration_seconds: null
-              };
+            // Create time log data
+            const timeLogData = {
+              user_id: result.employeeData.id,
+              employee_code: result.employeeData.employee_code,
+              start_time: startTimeISO,
+              end_time: null,
+              duration_seconds: null
+            };
 
-              const dbResult = await insertTimeLog(timeLogData);
-              
-              if (dbResult && dbResult.id) {
-                // Successfully created in database
-                currentSession = {
-                  id: dbResult.id, // Use database ID
-                  user_id: result.employeeData.id,
-                  employee_code: result.employeeData.employee_code,
-                  start_time: startTimeISO,
-                  local_start_time: startTime.getTime()
-                };
+            const dbResult = await insertTimeLog(timeLogData);
+            
+            // Successfully created in database
+            currentSession = {
+              id: dbResult.id,
+              user_id: result.employeeData.id,
+              employee_code: result.employeeData.employee_code,
+              start_time: startTimeISO,
+              local_start_time: startTime.getTime()
+            };
 
-                chrome.storage.local.set({ currentSession }, () => {
-                  showStatus('🎯 Đã bắt đầu ca làm việc!', 'success');
-                  startText.textContent = 'Bắt Đầu';
-                  updateButtonStates(true);
-                  showTimer();
-                  startTimer();
-                  floatingButton.classList.add('active');
-                });
-              } else {
-                // Database failed, go to offline mode
-                throw new Error('Database insert failed');
-              }
+            chrome.storage.local.set({ currentSession }, () => {
+              showStatus('🎯 Đã bắt đầu ca làm việc!', 'success');
+              startText.textContent = 'Bắt Đầu';
+              updateButtonStates(true);
+              showTimer();
+              startTimer();
+              floatingButton.classList.add('active');
+            });
 
-            } catch (dbError) {
-              console.error('Database error:', dbError);
-              
-              // Fallback: create offline session
-              currentSession = {
-                id: 'offline_' + Date.now(),
-                user_id: result.employeeData.id,
-                employee_code: result.employeeData.employee_code,
-                start_time: startTimeISO,
-                local_start_time: startTime.getTime()
-              };
-
-              chrome.storage.local.set({ currentSession }, () => {
-                showStatus('⚠️ Bắt đầu ca làm việc (chế độ offline)', 'info');
-                startText.textContent = 'Bắt Đầu';
-                updateButtonStates(true);
-                showTimer();
-                startTimer();
-                floatingButton.classList.add('active');
-              });
+          } catch (dbError) {
+            console.error('Database error:', dbError);
+            
+            // Check if it's a duplicate session error
+            if (dbError.message.includes('already has an active session')) {
+              showStatus('⚠️ Bạn đã có phiên làm việc đang hoạt động!', 'error');
+              startText.textContent = 'Bắt Đầu';
+              startBtn.disabled = false;
+              return;
             }
+            
+            // Fallback: create offline session
+            startTime = new Date();
+            const startTimeISO = startTime.toISOString();
+            
+            currentSession = {
+              id: 'offline_' + Date.now(),
+              user_id: result.employeeData.id,
+              employee_code: result.employeeData.employee_code,
+              start_time: startTimeISO,
+              local_start_time: startTime.getTime()
+            };
+
+            chrome.storage.local.set({ currentSession }, () => {
+              showStatus('⚠️ Bắt đầu ca làm việc (chế độ offline)', 'info');
+              startText.textContent = 'Bắt Đầu';
+              updateButtonStates(true);
+              showTimer();
+              startTimer();
+              floatingButton.classList.add('active');
+            });
           }
         });
 
@@ -460,66 +580,51 @@
         endText.innerHTML = '<span class="loading"></span>Đang kết thúc...';
         endBtn.disabled = true;
 
-        if (currentSession && startTime) {
-          const endTime = new Date();
-          const endTimeISO = endTime.toISOString();
-          
-          // Calculate duration more accurately
-          let duration;
-          if (currentSession.local_start_time) {
-            // Use local timestamp for more accurate calculation
-            duration = Math.floor((endTime.getTime() - currentSession.local_start_time) / 1000);
+        if (!currentSession || !startTime) {
+          showStatus('❌ Không tìm thấy phiên làm việc!', 'error');
+          endText.textContent = 'Kết Thúc';
+          endBtn.disabled = false;
+          return;
+        }
+
+        const endTime = new Date();
+        const endTimeISO = endTime.toISOString();
+        
+        // Calculate duration more accurately
+        let duration;
+        if (currentSession.local_start_time) {
+          duration = Math.floor((endTime.getTime() - currentSession.local_start_time) / 1000);
+        } else {
+          const sessionStartTime = new Date(currentSession.start_time);
+          duration = Math.floor((endTime.getTime() - sessionStartTime.getTime()) / 1000);
+        }
+        
+        // Validate duration is reasonable (at least 1 second, max 24 hours)
+        if (duration < 1) {
+          showStatus('❌ Thời gian làm việc quá ngắn!', 'error');
+          endText.textContent = 'Kết Thúc';
+          endBtn.disabled = false;
+          return;
+        }
+        
+        if (duration > 86400) { // 24 hours
+          showStatus('⚠️ Thời gian làm việc vượt quá 24 giờ!', 'error');
+        }
+        
+        console.log(`Session duration: ${duration} seconds (${Math.floor(duration/3600)}h ${Math.floor((duration%3600)/60)}m)`);
+        
+        try {
+          // Only update if we have a valid database ID (integer)
+          if (currentSession.id && typeof currentSession.id === 'number') {
+            const updateResult = await updateTimeLog(currentSession.id, endTimeISO, duration);
+            
+            const hours = Math.floor(duration / 3600);
+            const minutes = Math.floor((duration % 3600) / 60);
+            
+            showStatus(`🏁 Kết thúc ca làm việc! (${hours}h ${minutes}m) - Đã lưu vào database`, 'success');
+            
           } else {
-            // Fallback to parsing stored time
-            const sessionStartTime = new Date(currentSession.start_time);
-            duration = Math.floor((endTime.getTime() - sessionStartTime.getTime()) / 1000);
-          }
-          
-          console.log(`Session duration: ${duration} seconds`);
-          
-          try {
-            // Only update if we have a valid database ID (integer)
-            if (currentSession.id && typeof currentSession.id === 'number') {
-              // Update time log in database with end time and duration
-              const updateResult = await updateTimeLog(currentSession.id, endTimeISO, duration);
-              
-              const hours = Math.floor(duration / 3600);
-              const minutes = Math.floor((duration % 3600) / 60);
-              
-              if (updateResult) {
-                showStatus(`🏁 Kết thúc ca làm việc! (${hours}h ${minutes}m) - Đã lưu vào database`, 'success');
-              } else {
-                throw new Error('Failed to update database');
-              }
-            } else {
-              // Handle offline records
-              const hours = Math.floor(duration / 3600);
-              const minutes = Math.floor((duration % 3600) / 60);
-              
-              showStatus(`⚠️ Kết thúc ca làm việc (${hours}h ${minutes}m) - Lưu offline`, 'info');
-              
-              // Store offline data for later sync
-              const offlineData = {
-                session_id: currentSession.id,
-                user_id: currentSession.user_id,
-                employee_code: currentSession.employee_code,
-                start_time: currentSession.start_time,
-                end_time: endTimeISO,
-                duration_seconds: duration,
-                timestamp: Date.now()
-              };
-              
-              // Save to local storage for later sync
-              chrome.storage.local.get(['offlineTimeLogs'], (result) => {
-                const offlineLogs = result.offlineTimeLogs || [];
-                offlineLogs.push(offlineData);
-                chrome.storage.local.set({ offlineTimeLogs });
-              });
-            }
-            
-          } catch (dbError) {
-            console.error('Database error:', dbError);
-            
+            // Handle offline records
             const hours = Math.floor(duration / 3600);
             const minutes = Math.floor((duration % 3600) / 60);
             
@@ -544,23 +649,45 @@
             });
           }
           
-          // Clear current session
-          currentSession = null;
-          startTime = null;
-          chrome.storage.local.remove(['currentSession'], () => {
-            endText.textContent = 'Kết Thúc';
-            updateButtonStates(false);
-            hideTimer();
+        } catch (dbError) {
+          console.error('Database error:', dbError);
+          
+          const hours = Math.floor(duration / 3600);
+          const minutes = Math.floor((duration % 3600) / 60);
+          
+          if (dbError.message.includes('already completed')) {
+            showStatus(`⚠️ Phiên làm việc đã kết thúc trước đó (${hours}h ${minutes}m)`, 'info');
+          } else {
+            showStatus(`⚠️ Kết thúc ca làm việc (${hours}h ${minutes}m) - Lưu offline`, 'info');
             
-            // Update floating button state
-            floatingButton.classList.remove('active');
-          });
-
-        } else {
-          showStatus('❌ Không tìm thấy phiên làm việc!', 'error');
-          endText.textContent = 'Kết Thúc';
-          endBtn.disabled = false;
+            // Store offline data for later sync
+            const offlineData = {
+              session_id: currentSession.id,
+              user_id: currentSession.user_id,
+              employee_code: currentSession.employee_code,
+              start_time: currentSession.start_time,
+              end_time: endTimeISO,
+              duration_seconds: duration,
+              timestamp: Date.now()
+            };
+            
+            chrome.storage.local.set(['offlineTimeLogs'], (result) => {
+              const offlineLogs = result.offlineTimeLogs || [];
+              offlineLogs.push(offlineData);
+              chrome.storage.local.set({ offlineTimeLogs });
+            });
+          }
         }
+        
+        // Clear current session
+        currentSession = null;
+        startTime = null;
+        chrome.storage.local.remove(['currentSession'], () => {
+          endText.textContent = 'Kết Thúc';
+          updateButtonStates(false);
+          hideTimer();
+          floatingButton.classList.remove('active');
+        });
 
       } catch (error) {
         console.error('Error ending work session:', error);
