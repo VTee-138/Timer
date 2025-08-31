@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Time Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2>🕒 Chấm Công Nhân Viên</h2>
+    </div>
+    
+    <div class="employee-id-section">
+      <input type="text" id="employeeIdInput" placeholder="Nhập mã nhân viên (AIP001, AIP002...)..." maxlength="10">
+    </div>
+    
+    <div id="userInfo" style="display: none;">
+      <p><strong>👋 Xin chào,</strong> <span id="userName">Guest</span></p>
+      <p><small>Mã NV: <span id="employeeId"></span></small></p>
+    </div>
+    
+    <div class="actions">
+      <button id="startBtn" disabled>
+        <span class="btn-text">Bắt Đầu</span>
+      </button>
+      <button id="endBtn" disabled>
+        <span class="btn-text">Kết Thúc</span>
+      </button>
+    </div>
+    
+    <div id="statusMessage"></div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
