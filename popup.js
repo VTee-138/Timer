@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Query database using employee_code instead of id
       const employee = await queryDatabase(`
         SELECT id, full_name, role, created_at, username, employee_code 
-        FROM users 
+        FROM users_new 
         WHERE employee_code = $1
       `, [employeeCode]);
 
