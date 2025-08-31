@@ -645,7 +645,14 @@
             chrome.storage.local.get(['offlineTimeLogs'], (result) => {
               const offlineLogs = result.offlineTimeLogs || [];
               offlineLogs.push(offlineData);
-              chrome.storage.local.set({ offlineTimeLogs });
+              chrome.storage.local.set({ offlineTimeLogs }, () => {
+                if (chrome.runtime.lastError) {
+                  console.error('Error saving offline data:', chrome.runtime.lastError);
+                  showStatus('❌ Lỗi lưu dữ liệu offline!', 'error');
+                } else {
+                  console.log('Offline data saved successfully:', offlineData);
+                }
+              });
             });
           }
           
@@ -671,10 +678,17 @@
               timestamp: Date.now()
             };
             
-            chrome.storage.local.set(['offlineTimeLogs'], (result) => {
+            chrome.storage.local.get(['offlineTimeLogs'], (result) => {
               const offlineLogs = result.offlineTimeLogs || [];
               offlineLogs.push(offlineData);
-              chrome.storage.local.set({ offlineTimeLogs });
+              chrome.storage.local.set({ offlineTimeLogs }, () => {
+                if (chrome.runtime.lastError) {
+                  console.error('Error saving offline data:', chrome.runtime.lastError);
+                  showStatus('❌ Lỗi lưu dữ liệu offline!', 'error');
+                } else {
+                  console.log('Offline data saved successfully:', offlineData);
+                }
+              });
             });
           }
         }
@@ -711,6 +725,79 @@
         floatingButton.classList.remove('active');
       });
     });
+
+    // Debug: Show offline data (triple click)
+    userInfo.addEventListener('click', (e) => {
+      if (e.detail === 3) { // Triple click
+        chrome.storage.local.get(['offlineTimeLogs'], (result) => {
+          const offlineLogs = result.offlineTimeLogs || [];
+          console.log('Offline time logs:', offlineLogs);
+          showStatus(`📋 Offline logs: ${offlineLogs.length} records`, 'info');
+          
+          // Auto-sync if there are offline records
+          if (offlineLogs.length > 0) {
+            syncOfflineData();
+          }
+        });
+      }
+    });
+
+    // Sync offline data to server
+    async function syncOfflineData() {
+      try {
+        showStatus('🔄 Đang đồng bộ dữ liệu offline...', 'info');
+        
+        chrome.storage.local.get(['offlineTimeLogs'], async (result) => {
+          const offlineLogs = result.offlineTimeLogs || [];
+          
+          if (offlineLogs.length === 0) {
+            showStatus('✅ Không có dữ liệu offline cần đồng bộ', 'success');
+            return;
+          }
+          
+          try {
+            const response = await fetch('http://timer.aipencil.name.vn/api/sync-offline', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ offlineLogs })
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+              // Clear synced offline data
+              chrome.storage.local.remove(['offlineTimeLogs'], () => {
+                showStatus(`✅ Đã đồng bộ ${offlineLogs.length} records offline`, 'success');
+                console.log('Sync results:', result);
+              });
+            } else {
+              throw new Error(`Sync failed: ${result.error || 'Unknown error'}`);
+            }
+            
+          } catch (syncError) {
+            console.error('Sync error:', syncError);
+            showStatus('❌ Lỗi đồng bộ dữ liệu offline', 'error');
+          }
+        });
+        
+      } catch (error) {
+        console.error('Error syncing offline data:', error);
+        showStatus('❌ Lỗi đồng bộ dữ liệu offline', 'error');
+      }
+    }
+
+    // Auto-sync on load if there's internet
+    setTimeout(() => {
+      chrome.storage.local.get(['offlineTimeLogs'], (result) => {
+        const offlineLogs = result.offlineTimeLogs || [];
+        if (offlineLogs.length > 0) {
+          console.log(`Found ${offlineLogs.length} offline records, attempting auto-sync...`);
+          syncOfflineData();
+        }
+      });
+    }, 2000); // Wait 2 seconds after popup load
   }
 
   // Inject styles
