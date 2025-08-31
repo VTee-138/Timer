@@ -324,8 +324,6 @@
         // Database functions
     async function insertTimeLog(data) {
       try {
-        // For now, we'll use a simple fetch to a webhook/API endpoint
-        // You'll need to create an API endpoint to handle database operations
         const response = await fetch('http://timer.aipencil.name.vn/api/time-logs', {
           method: 'POST',
           headers: {
@@ -335,14 +333,20 @@
         });
 
         if (!response.ok) {
-          throw new Error('Database insert failed');
+          throw new Error(`Database insert failed: ${response.status}`);
         }
 
-        return await response.json();
+        const result = await response.json();
+        // Only return result if it has a valid database ID
+        if (result && result.id && typeof result.id === 'number') {
+          return result;
+        } else {
+          throw new Error('Invalid response from server');
+        }
       } catch (error) {
         console.error('Error inserting time log:', error);
-        // Return mock ID for offline mode
-        return { id: 'offline_' + Date.now() };
+        // Return null to indicate failure, don't return mock ID
+        return null;
       }
     }
 
@@ -382,13 +386,11 @@
             startTime = new Date();
             const startTimeISO = startTime.toISOString();
             
-            // Generate random session ID first
-            const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-            
             try {
               // Insert new time log record into database
               const timeLogData = {
                 user_id: result.employeeData.id, // UUID from users table
+                employee_code: result.employeeData.employee_code, // Add employee_code
                 start_time: startTimeISO,
                 end_time: null,
                 duration_seconds: null
@@ -396,35 +398,39 @@
 
               const dbResult = await insertTimeLog(timeLogData);
               
-              currentSession = {
-                id: dbResult.id || sessionId, // Use database ID or fallback to session ID
-                user_id: result.employeeData.id,
-                employee_code: result.employeeData.employee_code,
-                start_time: startTimeISO,
-                local_start_time: startTime.getTime() // Store timestamp for accurate timer calculation
-              };
+              if (dbResult && dbResult.id) {
+                // Successfully created in database
+                currentSession = {
+                  id: dbResult.id, // Use database ID
+                  user_id: result.employeeData.id,
+                  employee_code: result.employeeData.employee_code,
+                  start_time: startTimeISO,
+                  local_start_time: startTime.getTime()
+                };
 
-              chrome.storage.local.set({ currentSession }, () => {
-                showStatus('🎯 Đã bắt đầu ca làm việc!', 'success');
-                startText.textContent = 'Bắt Đầu';
-                updateButtonStates(true);
-                showTimer();
-                startTimer();
-                
-                // Update floating button state
-                floatingButton.classList.add('active');
-              });
+                chrome.storage.local.set({ currentSession }, () => {
+                  showStatus('🎯 Đã bắt đầu ca làm việc!', 'success');
+                  startText.textContent = 'Bắt Đầu';
+                  updateButtonStates(true);
+                  showTimer();
+                  startTimer();
+                  floatingButton.classList.add('active');
+                });
+              } else {
+                // Database failed, go to offline mode
+                throw new Error('Database insert failed');
+              }
 
             } catch (dbError) {
               console.error('Database error:', dbError);
               
               // Fallback: create offline session
               currentSession = {
-                id: sessionId,
+                id: 'offline_' + Date.now(),
                 user_id: result.employeeData.id,
                 employee_code: result.employeeData.employee_code,
                 start_time: startTimeISO,
-                local_start_time: startTime.getTime() // Store timestamp for accurate timer calculation
+                local_start_time: startTime.getTime()
               };
 
               chrome.storage.local.set({ currentSession }, () => {
@@ -433,7 +439,6 @@
                 updateButtonStates(true);
                 showTimer();
                 startTimer();
-                
                 floatingButton.classList.add('active');
               });
             }
@@ -473,15 +478,24 @@
           console.log(`Session duration: ${duration} seconds`);
           
           try {
-            // Update time log in database with end time and duration
-            const updateResult = await updateTimeLog(currentSession.id, endTimeISO, duration);
-            
-            const hours = Math.floor(duration / 3600);
-            const minutes = Math.floor((duration % 3600) / 60);
-            
-            if (updateResult) {
-              showStatus(`🏁 Kết thúc ca làm việc! (${hours}h ${minutes}m) - Đã lưu vào database`, 'success');
+            // Only update if we have a valid database ID (integer)
+            if (currentSession.id && typeof currentSession.id === 'number') {
+              // Update time log in database with end time and duration
+              const updateResult = await updateTimeLog(currentSession.id, endTimeISO, duration);
+              
+              const hours = Math.floor(duration / 3600);
+              const minutes = Math.floor((duration % 3600) / 60);
+              
+              if (updateResult) {
+                showStatus(`🏁 Kết thúc ca làm việc! (${hours}h ${minutes}m) - Đã lưu vào database`, 'success');
+              } else {
+                throw new Error('Failed to update database');
+              }
             } else {
+              // Handle offline records
+              const hours = Math.floor(duration / 3600);
+              const minutes = Math.floor((duration % 3600) / 60);
+              
               showStatus(`⚠️ Kết thúc ca làm việc (${hours}h ${minutes}m) - Lưu offline`, 'info');
               
               // Store offline data for later sync

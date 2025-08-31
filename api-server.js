@@ -33,15 +33,15 @@ pool.connect((err, client, release) => {
 // POST /api/time-logs - Create new time log entry
 app.post('/api/time-logs', async (req, res) => {
   try {
-    const { user_id, start_time, end_time, duration_seconds } = req.body;
+    const { user_id, employee_code, start_time, end_time, duration_seconds } = req.body;
     
     const query = `
-      INSERT INTO time_logs (user_id, start_time, end_time, duration_seconds)
-      VALUES ($1, $2, $3, $4)
-      RETURNING user_id, start_time, end_time, duration_seconds
+      INSERT INTO time_logs (user_id, employee_code, start_time, end_time, duration_seconds)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, user_id, employee_code, start_time, end_time, duration_seconds
     `;
     
-    const values = [user_id, start_time, end_time, duration_seconds];
+    const values = [user_id, employee_code, start_time, end_time, duration_seconds];
     const result = await pool.query(query, values);
     
     console.log('Time log created:', result.rows[0]);
@@ -63,7 +63,7 @@ app.put('/api/time-logs/:id', async (req, res) => {
       UPDATE time_logs 
       SET end_time = $1, duration_seconds = $2
       WHERE id = $3
-      RETURNING id, user_id, start_time, end_time, duration_seconds
+      RETURNING id, user_id, employee_code, start_time, end_time, duration_seconds
     `;
     
     const values = [end_time, duration_seconds, id];
@@ -88,8 +88,8 @@ app.get('/api/time-logs/:userId', async (req, res) => {
     const { userId } = req.params;
     
     const query = `
-      SELECT tl.id, tl.user_id, tl.start_time, tl.end_time, tl.duration_seconds,
-             u.full_name, u.employee_code
+      SELECT tl.id, tl.user_id, tl.employee_code, tl.start_time, tl.end_time, tl.duration_seconds,
+             u.full_name, u.employee_code as user_employee_code
       FROM time_logs tl
       JOIN users u ON tl.user_id = u.id
       WHERE tl.user_id = $1
@@ -141,12 +141,13 @@ app.post('/api/sync-offline', async (req, res) => {
         if (log.session_id.startsWith('offline_')) {
           // Create new record for offline sessions
           const insertQuery = `
-            INSERT INTO time_logs (user_id, start_time, end_time, duration_seconds)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO time_logs (user_id, employee_code, start_time, end_time, duration_seconds)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id
           `;
           const insertResult = await pool.query(insertQuery, [
             log.user_id, 
+            log.employee_code,
             log.start_time, 
             log.end_time, 
             log.duration_seconds
