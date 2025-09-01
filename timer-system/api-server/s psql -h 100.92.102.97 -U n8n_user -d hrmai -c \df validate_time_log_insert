@@ -1,0 +1,7 @@
+           trigger_name           | event_manipulation |              action_statement               
+----------------------------------+--------------------+---------------------------------------------
+ trigger_validate_time_log_insert | INSERT             | EXECUTE FUNCTION validate_time_log_insert()
+ trigger_auto_calculate_duration  | UPDATE             | EXECUTE FUNCTION auto_calculate_duration()
+ update_time_logs_updated_at      | UPDATE             | EXECUTE FUNCTION update_updated_at_column()
+(3 rows)
+

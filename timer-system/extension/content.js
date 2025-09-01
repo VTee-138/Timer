@@ -141,7 +141,6 @@
           // Server has active session, restore it
           currentSession = {
             id: activeSession.id,
-            user_id: activeSession.user_id,
             employee_code: activeSession.employee_code,
             start_time: activeSession.start_time,
             local_start_time: new Date(activeSession.start_time).getTime()
@@ -163,7 +162,7 @@
         const localSession = result.currentSession;
         
         // Validate local session has required data
-        if (localSession.id && localSession.user_id && localSession.start_time) {
+        if (localSession.id && localSession.start_time) {
           // For database IDs, verify session still exists on server using employee_code
           if (typeof localSession.id === 'number') {
             const activeSession = await checkActiveSession(result.employeeData.employee_code);
@@ -488,16 +487,13 @@
             if (existingSession) {
               showStatus('⚠️ Bạn đã có phiên làm việc đang hoạt động!', 'error');
               
-              // Restore the existing session
-              currentSession = {
-                id: existingSession.id,
-                user_id: existingSession.user_id,
-                employee_code: existingSession.employee_code,
-                start_time: existingSession.start_time,
-                local_start_time: new Date(existingSession.start_time).getTime()
-              };
-              
-              startTime = new Date(existingSession.start_time);
+          // Restore the existing session
+          currentSession = {
+            id: existingSession.id,
+            employee_code: existingSession.employee_code,
+            start_time: existingSession.start_time,
+            local_start_time: new Date(existingSession.start_time).getTime()
+          };              startTime = new Date(existingSession.start_time);
               chrome.storage.local.set({ currentSession });
               updateButtonStates(true);
               showTimer();
@@ -511,13 +507,8 @@
             startTime = new Date();
             const startTimeISO = startTime.toISOString();
             
-            // Create time log data
-            // Note: time_logs.user_id expects UUID, but we only have user_new.id as bigint
-            // Generate a UUID for now since there's no proper FK relationship
-            const userUUID = generateUUID();
-            
+            // Create time log data (without user_id - only using employee_code)
             const timeLogData = {
-              user_id: userUUID,
               employee_code: result.employeeData.employee_code,
               start_time: startTimeISO,
               end_time: null,
@@ -529,7 +520,6 @@
             // Successfully created in database
             currentSession = {
               id: dbResult.id,
-              user_id: userUUID, // Use the generated UUID
               employee_code: result.employeeData.employee_code,
               start_time: startTimeISO,
               local_start_time: startTime.getTime()
@@ -558,11 +548,9 @@
             // Fallback: create offline session
             startTime = new Date();
             const startTimeISO = startTime.toISOString();
-            const userUUID = generateUUID(); // Generate UUID for offline session too
             
             currentSession = {
               id: 'offline_' + Date.now(),
-              user_id: userUUID,
               employee_code: result.employeeData.employee_code,
               start_time: startTimeISO,
               local_start_time: startTime.getTime()
@@ -647,7 +635,6 @@
             // Store offline data for later sync
             const offlineData = {
               session_id: currentSession.id,
-              user_id: currentSession.user_id,
               employee_code: currentSession.employee_code,
               start_time: currentSession.start_time,
               end_time: endTimeISO,
@@ -684,7 +671,6 @@
             // Store offline data for later sync
             const offlineData = {
               session_id: currentSession.id,
-              user_id: currentSession.user_id,
               employee_code: currentSession.employee_code,
               start_time: currentSession.start_time,
               end_time: endTimeISO,

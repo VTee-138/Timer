@@ -33,13 +33,13 @@ pool.connect((err, client, release) => {
 // POST /api/time-logs - Create new time log entry
 app.post('/api/time-logs', async (req, res) => {
   try {
-    const { user_id, employee_code, start_time, end_time, duration_seconds } = req.body;
+    const { employee_code, start_time, end_time, duration_seconds } = req.body;
     
     // Validation
-    if (!user_id || !employee_code || !start_time) {
+    if (!employee_code || !start_time) {
       return res.status(400).json({ 
         error: 'Missing required fields', 
-        required: ['user_id', 'employee_code', 'start_time'] 
+        required: ['employee_code', 'start_time'] 
       });
     }
     
@@ -56,10 +56,6 @@ app.post('/api/time-logs', async (req, res) => {
       });
     }
     
-    // Verify employee_code matches user - user_id is UUID but user_new.id is bigint
-    // For now, skip the user verification since there's a type mismatch
-    // TODO: Fix the database schema to make user_id consistent
-    
     // Just validate that employee_code exists in user_new table
     const userCheck = await pool.query(
       'SELECT id, employee_code FROM user_new WHERE employee_code = $1',
@@ -71,12 +67,12 @@ app.post('/api/time-logs', async (req, res) => {
     }
     
     const query = `
-      INSERT INTO time_logs (user_id, employee_code, start_time, end_time, duration_seconds)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, user_id, employee_code, start_time, end_time, duration_seconds, created_at
+      INSERT INTO time_logs (employee_code, start_time, end_time, duration_seconds)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, employee_code, start_time, end_time, duration_seconds, created_at
     `;
     
-    const values = [user_id, employee_code, start_time, end_time, duration_seconds];
+    const values = [employee_code, start_time, end_time, duration_seconds];
     const result = await pool.query(query, values);
     
     console.log('Time log created:', result.rows[0]);
@@ -92,7 +88,7 @@ app.post('/api/time-logs', async (req, res) => {
     // Handle specific database errors
     if (error.code === '23505') { // Unique constraint violation
       return res.status(409).json({ 
-        error: 'User already has an active session',
+        error: 'Employee already has an active session',
         details: 'Please end the current session before starting a new one'
       });
     }
@@ -121,7 +117,7 @@ app.put('/api/time-logs/:id', async (req, res) => {
     
     // Check if record exists and is still active
     const existingRecord = await pool.query(
-      'SELECT id, user_id, employee_code, start_time, end_time FROM time_logs WHERE id = $1',
+      'SELECT id, employee_code, start_time, end_time FROM time_logs WHERE id = $1',
       [id]
     );
     
@@ -159,7 +155,7 @@ app.put('/api/time-logs/:id', async (req, res) => {
       UPDATE time_logs 
       SET end_time = $1, duration_seconds = $2, updated_at = NOW()
       WHERE id = $3
-      RETURNING id, user_id, employee_code, start_time, end_time, duration_seconds, updated_at
+      RETURNING id, employee_code, start_time, end_time, duration_seconds, updated_at
     `;
     
     const values = [end_time, calculatedDuration, id];
@@ -181,19 +177,19 @@ app.put('/api/time-logs/:id', async (req, res) => {
   }
 });
 
-// GET /api/time-logs/:userId - Get time logs for a user
-app.get('/api/time-logs/:userId', async (req, res) => {
+// GET /api/time-logs/:employeeCode - Get time logs for an employee by employee code
+app.get('/api/time-logs/:employeeCode', async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { employeeCode } = req.params;
     const { limit = 50, offset = 0, date_from, date_to } = req.query;
     
     // Validation
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing userId parameter' });
+    if (!employeeCode) {
+      return res.status(400).json({ error: 'Missing employeeCode parameter' });
     }
     
     let query = `
-      SELECT tl.id, tl.user_id, tl.employee_code, tl.start_time, tl.end_time, 
+      SELECT tl.id, tl.employee_code, tl.start_time, tl.end_time, 
              tl.duration_seconds, tl.created_at, tl.updated_at,
              u.full_name, u.employee_code as user_employee_code,
              CASE 
@@ -202,10 +198,10 @@ app.get('/api/time-logs/:userId', async (req, res) => {
              END as status
       FROM time_logs tl
       LEFT JOIN user_new u ON tl.employee_code = u.employee_code
-      WHERE tl.user_id = $1
+      WHERE tl.employee_code = $1
     `;
     
-    const values = [userId];
+    const values = [employeeCode];
     let paramIndex = 2;
     
     // Add date filters if provided
@@ -230,12 +226,12 @@ app.get('/api/time-logs/:userId', async (req, res) => {
     const countQuery = `
       SELECT COUNT(*) as total
       FROM time_logs tl
-      WHERE tl.user_id = $1
+      WHERE tl.employee_code = $1
       ${date_from ? 'AND tl.start_time >= $2' : ''}
       ${date_to ? `AND tl.start_time <= $${date_from ? '3' : '2'}` : ''}
     `;
     
-    const countValues = [userId];
+    const countValues = [employeeCode];
     if (date_from) countValues.push(date_from);
     if (date_to) countValues.push(date_to);
     
@@ -292,7 +288,7 @@ app.get('/api/users/active-session/:employeeCode', async (req, res) => {
     const { employeeCode } = req.params;
     
     const query = `
-      SELECT tl.id, tl.user_id, tl.employee_code, tl.start_time, tl.created_at,
+      SELECT tl.id, tl.employee_code, tl.start_time, tl.created_at,
              u.full_name, u.employee_code as user_employee_code
       FROM time_logs tl
       LEFT JOIN user_new u ON tl.employee_code = u.employee_code
@@ -337,12 +333,11 @@ app.post('/api/sync-offline', async (req, res) => {
         if (log.session_id.startsWith('offline_')) {
           // Create new record for offline sessions
           const insertQuery = `
-            INSERT INTO time_logs (user_id, employee_code, start_time, end_time, duration_seconds)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO time_logs (employee_code, start_time, end_time, duration_seconds)
+            VALUES ($1, $2, $3, $4)
             RETURNING id
           `;
           const insertResult = await pool.query(insertQuery, [
-            log.user_id, 
             log.employee_code,
             log.start_time, 
             log.end_time, 
@@ -388,7 +383,7 @@ app.listen(port, () => {
   console.log('Available endpoints:');
   console.log('  POST   /api/time-logs                        - Create time log');
   console.log('  PUT    /api/time-logs/:id                    - Update time log');
-  console.log('  GET    /api/time-logs/:userId                - Get user time logs');
+  console.log('  GET    /api/time-logs/:employeeCode          - Get time logs by employee code');
   console.log('  GET    /api/users/:employeeCode              - Get user by employee code');
   console.log('  GET    /api/users/active-session/:employeeCode - Check active session');
   console.log('  POST   /api/sync-offline                     - Sync offline data');
