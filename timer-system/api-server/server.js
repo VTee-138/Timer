@@ -43,15 +43,15 @@ app.post('/api/time-logs', async (req, res) => {
       });
     }
     
-    // Check if user has an active session (end_time is NULL)
+    // Check if employee has an active session (using employee_code instead of user_id)
     const activeSessionCheck = await pool.query(
-      'SELECT id FROM time_logs WHERE user_id = $1 AND end_time IS NULL',
-      [user_id]
+      'SELECT id FROM time_logs WHERE employee_code = $1 AND end_time IS NULL',
+      [employee_code]
     );
     
     if (activeSessionCheck.rows.length > 0) {
       return res.status(409).json({ 
-        error: 'User already has an active session', 
+        error: 'Employee already has an active session', 
         active_session_id: activeSessionCheck.rows[0].id 
       });
     }
@@ -286,22 +286,22 @@ app.get('/api/users/:employeeCode', async (req, res) => {
   }
 });
 
-// GET /api/users/:userId/active-session - Check if user has active session
-app.get('/api/users/:userId/active-session', async (req, res) => {
+// GET /api/users/active-session/:employeeCode - Check if employee has active session by employee code
+app.get('/api/users/active-session/:employeeCode', async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { employeeCode } = req.params;
     
     const query = `
       SELECT tl.id, tl.user_id, tl.employee_code, tl.start_time, tl.created_at,
              u.full_name, u.employee_code as user_employee_code
       FROM time_logs tl
       LEFT JOIN user_new u ON tl.employee_code = u.employee_code
-      WHERE tl.user_id = $1 AND tl.end_time IS NULL
+      WHERE tl.employee_code = $1 AND tl.end_time IS NULL
       ORDER BY tl.start_time DESC
       LIMIT 1
     `;
     
-    const result = await pool.query(query, [userId]);
+    const result = await pool.query(query, [employeeCode]);
     
     if (result.rows.length === 0) {
       return res.json({
@@ -386,12 +386,13 @@ app.get('/health', (req, res) => {
 app.listen(port, () => {
   console.log(`Time tracking API server running on http://timer.aipencil.name.vn`);
   console.log('Available endpoints:');
-  console.log('  POST   /api/time-logs          - Create time log');
-  console.log('  PUT    /api/time-logs/:id      - Update time log');
-  console.log('  GET    /api/time-logs/:userId  - Get user time logs');
-  console.log('  GET    /api/users/:employeeCode - Get user by employee code');
-  console.log('  POST   /api/sync-offline       - Sync offline data');
-  console.log('  GET    /health                 - Health check');
+  console.log('  POST   /api/time-logs                        - Create time log');
+  console.log('  PUT    /api/time-logs/:id                    - Update time log');
+  console.log('  GET    /api/time-logs/:userId                - Get user time logs');
+  console.log('  GET    /api/users/:employeeCode              - Get user by employee code');
+  console.log('  GET    /api/users/active-session/:employeeCode - Check active session');
+  console.log('  POST   /api/sync-offline                     - Sync offline data');
+  console.log('  GET    /health                               - Health check');
 });
 
 // Graceful shutdown

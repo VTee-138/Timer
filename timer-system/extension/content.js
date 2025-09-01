@@ -106,6 +106,15 @@
   let timerInterval = null;
   let startTime = null;
 
+  // Helper function to generate UUID v4
+  function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c == 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
   function initializePopupLogic() {
     const startBtn = document.getElementById('startBtn');
     const endBtn = document.getElementById('endBtn');
@@ -126,8 +135,8 @@
         enableButtons();
         employeeIdInput.value = result.employeeData.employee_code;
         
-        // Check for active session on server
-        const activeSession = await checkActiveSession(result.employeeData.id);
+        // Check for active session on server using employee_code
+        const activeSession = await checkActiveSession(result.employeeData.employee_code);
         if (activeSession) {
           // Server has active session, restore it
           currentSession = {
@@ -155,9 +164,9 @@
         
         // Validate local session has required data
         if (localSession.id && localSession.user_id && localSession.start_time) {
-          // For database IDs, verify session still exists on server
+          // For database IDs, verify session still exists on server using employee_code
           if (typeof localSession.id === 'number') {
-            const activeSession = await checkActiveSession(localSession.user_id);
+            const activeSession = await checkActiveSession(result.employeeData.employee_code);
             if (activeSession && activeSession.id === localSession.id) {
               // Local session matches server, restore it
               currentSession = localSession;
@@ -247,16 +256,16 @@
         
         // Fallback to mock data if API is not available
         const mockEmployees = {
-          'AIP001': { id: 'a4f77fd-032c-4b3c-8db5-00ef6b39a372', full_name: 'Đào Khôi Nguyên', role: 'Dev' },
-          'AIP002': { id: '8d4b4a43-b8e0-48f6-bd95-0cde0c3a4ea5', full_name: 'Nguyễn Xuân Khang', role: 'Dev' },
-          'AIP003': { id: '7e63b1ec-882d-4b28-80d4-e7a3aa80cb32', full_name: 'Nguyễn Nhật Bảng', role: 'Dev' },
-          'AIP004': { id: '16e1dd0-c2ab-4a66-a358-e3e993a649fe', full_name: 'Nguyễn Ngọc Tiến Mạnh', role: 'Dev' },
-          'AIP005': { id: '3f0ad0f6-3b31-4d7b-9e74-42e740231592', full_name: 'Dương Huy Bách', role: 'Dev' },
-          'AIP006': { id: 'ea70d71-5818-4c41-b80e-9b6ab750aad3', full_name: 'Nguyễn Duy Thái', role: 'Dev' },
-          'AIP007': { id: '52cf5834-55ac-4281-9442-04e53a1416af', full_name: 'Lê Quốc Anh', role: 'Dev' },
-          'AIP008': { id: '479ac2f4-4f3e-4949-9089-871ed9f83115', full_name: 'Hoàng Anh Đức', role: 'Dev' },
-          'AIP010': { id: '4977de15-67d8-4fde-8cbb-080ad256b7a3', full_name: 'Tạ Trường Sơn', role: 'Dev' },
-          'AIP011': { id: '6f1f59ed-5218-46f2-82c2-9b128c48bb5c', full_name: 'Mai Tô Nhu', role: 'Dev' }
+          'AIP001': { id: 1, full_name: 'Đào Khôi Nguyên', role: 'Dev' },
+          'AIP002': { id: 2, full_name: 'Nguyễn Xuân Khang', role: 'Dev' },
+          'AIP003': { id: 3, full_name: 'Nguyễn Nhật Bảng', role: 'Dev' },
+          'AIP004': { id: 4, full_name: 'Nguyễn Ngọc Tiến Mạnh', role: 'Dev' },
+          'AIP005': { id: 5, full_name: 'Dương Huy Bách', role: 'Dev' },
+          'AIP006': { id: 6, full_name: 'Nguyễn Duy Thái', role: 'Dev' },
+          'AIP007': { id: 7, full_name: 'Lê Quốc Anh', role: 'Dev' },
+          'AIP008': { id: 8, full_name: 'Hoàng Anh Đức', role: 'Dev' },
+          'AIP010': { id: 10, full_name: 'Tạ Trường Sơn', role: 'Dev' },
+          'AIP011': { id: 11, full_name: 'Mai Tô Nhu', role: 'Dev' }
         };
 
         setTimeout(() => {
@@ -442,9 +451,9 @@
       }
     }
 
-    async function checkActiveSession(userId) {
+    async function checkActiveSession(employeeCode) {
       try {
-        const response = await fetch(`http://timer.aipencil.name.vn/api/users/${userId}/active-session`);
+        const response = await fetch(`http://timer.aipencil.name.vn/api/users/active-session/${employeeCode}`);
         
         if (!response.ok) {
           throw new Error(`Failed to check active session: ${response.status}`);
@@ -474,8 +483,8 @@
           }
 
           try {
-            // Check if user already has an active session
-            const existingSession = await checkActiveSession(result.employeeData.id);
+            // Check if user already has an active session using employee_code
+            const existingSession = await checkActiveSession(result.employeeData.employee_code);
             if (existingSession) {
               showStatus('⚠️ Bạn đã có phiên làm việc đang hoạt động!', 'error');
               
@@ -503,8 +512,12 @@
             const startTimeISO = startTime.toISOString();
             
             // Create time log data
+            // Note: time_logs.user_id expects UUID, but we only have user_new.id as bigint
+            // Generate a UUID for now since there's no proper FK relationship
+            const userUUID = generateUUID();
+            
             const timeLogData = {
-              user_id: result.employeeData.id,
+              user_id: userUUID,
               employee_code: result.employeeData.employee_code,
               start_time: startTimeISO,
               end_time: null,
@@ -516,7 +529,7 @@
             // Successfully created in database
             currentSession = {
               id: dbResult.id,
-              user_id: result.employeeData.id,
+              user_id: userUUID, // Use the generated UUID
               employee_code: result.employeeData.employee_code,
               start_time: startTimeISO,
               local_start_time: startTime.getTime()
@@ -545,10 +558,11 @@
             // Fallback: create offline session
             startTime = new Date();
             const startTimeISO = startTime.toISOString();
+            const userUUID = generateUUID(); // Generate UUID for offline session too
             
             currentSession = {
               id: 'offline_' + Date.now(),
-              user_id: result.employeeData.id,
+              user_id: userUUID,
               employee_code: result.employeeData.employee_code,
               start_time: startTimeISO,
               local_start_time: startTime.getTime()
